@@ -96,6 +96,9 @@ def format_percentage(value: float) -> str:
 
 def check_admin(user_id: int) -> bool:
     """Проверить что пользователь - админ."""
+    # Если ADMIN_IDS пустой - разрешаем всем
+    if not ADMIN_IDS:
+        return True
     return user_id in ADMIN_IDS
 
 
@@ -104,7 +107,7 @@ def check_admin(user_id: int) -> bool:
 # ============================================================================
 
 def admin_only(func):
-    """Декоратор: только для админов."""
+    """Декоратор: только для админов (если настроено)."""
     def wrapper(message):
         if not check_admin(message.from_user.id):
             bot.reply_to(message, "❌ У вас нет доступа к этому боту.")
@@ -306,6 +309,10 @@ def process_content(message):
     utm_id = result["utm_id"]
     link_type = result.get("link_type", "landing")
 
+    # Генерация короткой ссылки через Cloudflare Worker
+    short_link_base = os.getenv("SHORT_LINK_BASE_URL", "")
+    short_link = f"{short_link_base}/go1/{utm_id}" if short_link_base else utm_link
+
     # Красивый ответ
     link_emoji = "🌐" if link_type == "landing" else "📱"
     link_description = "Landing Page" if link_type == "landing" else "Direct Link"
@@ -320,15 +327,15 @@ def process_content(message):
 ✅ *UTM ссылка создана!*
 
 {link_emoji} *Тип:* {link_description}
-🔗 *Ссылка для {source}:*
-`{utm_link}`
+🔗 *Короткая ссылка:*
+`{short_link}`
 
 📊 *Параметры:*
 • Campaign: `{campaign}`
 • Source: `{source}`
 • Content: `{content or 'не указан'}`
 • UTM ID: `{utm_id}`
-• Type: `{link_type}`
+• Префикс: `go1`
 
 {usage_hint}
 """
