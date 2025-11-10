@@ -34,6 +34,9 @@ ADMIN_JWT_TOKEN = os.getenv("ADMIN_JWT_TOKEN")  # JWT для API запросо�
 # Список админов (Telegram User IDs)
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(","))) if os.getenv("ADMIN_IDS") else []
 
+# Список разрешенных групп/каналов (Telegram Chat IDs)
+ALLOWED_CHATS = list(map(int, os.getenv("ALLOWED_CHATS", "").split(","))) if os.getenv("ALLOWED_CHATS") else []
+
 # Базовый URL для landing pages
 LANDING_BASE_URL = os.getenv("LANDING_BASE_URL", "http://localhost:8000/api/v1/landing/l")
 
@@ -102,17 +105,45 @@ def check_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
+def check_allowed_chat(chat_id: int) -> bool:
+    """Проверить что чат разрешен."""
+    # Если список пустой - разрешаем все чаты
+    if not ALLOWED_CHATS:
+        return True
+    return chat_id in ALLOWED_CHATS
+
+
+def is_group_chat(message) -> bool:
+    """Проверить что это групповой чат."""
+    return message.chat.type in ['group', 'supergroup']
+
+
 # ============================================================================
-# Декоратор для проверки прав админа
+# Декоратор для проверки прав
 # ============================================================================
 
 def admin_only(func):
-    """Декоратор: только для админов (если настроено)."""
+    """Декоратор: проверка доступа (админы или разрешенные группы)."""
     def wrapper(message):
-        if not check_admin(message.from_user.id):
-            bot.reply_to(message, "❌ У вас нет доступа к этому боту.")
-            return
-        return func(message)
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+
+        # Проверка 1: Если это разрешенная группа - доступ всем участникам
+        if is_group_chat(message) and check_allowed_chat(chat_id):
+            return func(message)
+
+        # Проверка 2: Если это личка - проверяем админа
+        if not is_group_chat(message):
+            if check_admin(user_id):
+                return func(message)
+            else:
+                bot.reply_to(message, "❌ Бот работает только в разрешенных группах или для админов.\n\nДобавьте бота в вашу закрытую группу!")
+                return
+
+        # Проверка 3: Группа не разрешена
+        bot.reply_to(message, "❌ Эта группа не авторизована для использования бота.")
+        return
+
     return wrapper
 
 
@@ -126,10 +157,15 @@ def handle_start(message):
     """Стартовое сообщение."""
     user_name = message.from_user.first_name
 
+    chat_info = ""
+    if is_group_chat(message):
+        chat_info = f"\n\n💬 *Группа:* {message.chat.title}\n🆔 *Chat ID:* `{message.chat.id}`"
+
     text = f"""
 👋 Привет, {user_name}!
 
 🤖 *Admin Bot для UTM трекинга*
+{chat_info}
 
 📋 *Доступные команды:*
 
@@ -139,6 +175,7 @@ def handle_start(message):
 🏆 /top - Топ источников
 💰 /conversions - Последние покупки
 ⚙️ /settings - Настройки
+🆔 /chatid - Узнать ID этой группы
 
 ℹ️ /help - Показать это сообщение
 """
@@ -274,10 +311,51 @@ def process_content(message):
         content = None
 
     user_states[user_id]["content"] = content
+    user_states[user_id]["step"] = "prefix"
+
+    # Показать выбор префикса
+    markup = InlineKeyboardMarkup(row_width=5)
+    prefixes = [
+        InlineKeyboardButton("go1", callback_data="prefix_go1"),
+        InlineKeyboardButton("go2", callback_data="prefix_go2"),
+        InlineKeyboardButton("go3", callback_data="prefix_go3"),
+        InlineKeyboardButton("go4", callback_data="prefix_go4"),
+        InlineKeyboardButton("go5", callback_data="prefix_go5"),
+        InlineKeyboardButton("lnk1", callback_data="prefix_lnk1"),
+        InlineKeyboardButton("lnk2", callback_data="prefix_lnk2"),
+        InlineKeyboardButton("lnk3", callback_data="prefix_lnk3"),
+        InlineKeyboardButton("tr1", callback_data="prefix_tr1"),
+        InlineKeyboardButton("tr2", callback_data="prefix_tr2"),
+    ]
+    markup.add(*prefixes)
+
+    bot.send_message(
+        message.chat.id,
+        f"✅ Креатив: *{content or 'не указан'}*\n\n"
+        f"Выберите префикс для короткой ссылки:\n"
+        f"_(будет ссылка вида: link.csmaster.cc/go1/utm\\_id)_",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("prefix_"))
+def handle_prefix_selection(call):
+    """Обработать выбор префикса и сгенерировать ссылку."""
+    user_id = call.from_user.id
+    prefix = call.data.replace("prefix_", "")
+
+    if user_id not in user_states:
+        bot.answer_callback_query(call.id, "❌ Сессия истекла. Начните с /generate")
+        return
+
+    user_states[user_id]["prefix"] = prefix
+    bot.answer_callback_query(call.id, f"Выбран префикс: {prefix}")
 
     # Генерируем UTM ссылку
     campaign = user_states[user_id]["campaign"]
     source = user_states[user_id]["source"]
+    content = user_states[user_id].get("content")
     link_type = user_states[user_id].get("link_type", "landing")
 
     # Определяем base_url в зависимости от типа ссылки
@@ -311,7 +389,7 @@ def process_content(message):
 
     # Генерация короткой ссылки через Cloudflare Worker
     short_link_base = os.getenv("SHORT_LINK_BASE_URL", "")
-    short_link = f"{short_link_base}/go1/{utm_id}" if short_link_base else utm_link
+    short_link = f"{short_link_base}/{prefix}/{utm_id}" if short_link_base else utm_link
 
     # Красивый ответ
     link_emoji = "🌐" if link_type == "landing" else "📱"
@@ -335,7 +413,7 @@ def process_content(message):
 • Source: `{source}`
 • Content: `{content or 'не указан'}`
 • UTM ID: `{utm_id}`
-• Префикс: `go1`
+• Префикс: `{prefix}`
 
 {usage_hint}
 """
