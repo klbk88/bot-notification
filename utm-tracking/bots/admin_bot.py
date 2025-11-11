@@ -155,11 +155,14 @@ def admin_only(func):
 @admin_only
 def handle_start(message):
     """Стартовое сообщение."""
-    user_name = message.from_user.first_name
+    # Escape markdown special characters in user name
+    user_name = message.from_user.first_name or "User"
+    user_name = user_name.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
 
     chat_info = ""
     if is_group_chat(message):
-        chat_info = f"\n\n💬 *Группа:* {message.chat.title}\n🆔 *Chat ID:* `{message.chat.id}`"
+        chat_title = (message.chat.title or "Group").replace('_', '\\_').replace('*', '\\*')
+        chat_info = f"\n\n💬 *Группа:* {chat_title}\n🆔 *Chat ID:* `{message.chat.id}`"
 
     text = f"""
 👋 Привет, {user_name}!
