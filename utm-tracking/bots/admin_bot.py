@@ -784,15 +784,23 @@ def schedule_tasks():
 
 if __name__ == "__main__":
     print("🤖 Admin Bot starting...")
-    print(f"👤 Admins: {ADMIN_IDS}")
+    print(f"👤 Admins: {ADMIN_IDS if ADMIN_IDS else 'None (public access in groups)'}")
+    print(f"💬 Allowed Chats: {ALLOWED_CHATS if ALLOWED_CHATS else 'All'}")
     print(f"📊 API: {API_BASE_URL}")
 
-    if not ADMIN_IDS:
-        print("⚠️  WARNING: No admin IDs configured! Set ADMIN_IDS in .env")
+    # Clear any pending updates and reset bot state
+    try:
+        bot.remove_webhook()
+        bot.get_updates(offset=-1)
+        print("✅ Cleared pending updates")
+    except Exception as e:
+        print(f"⚠️  Could not clear updates: {e}")
 
     # Запустить фоновые задачи в отдельном потоке
     scheduler_thread = threading.Thread(target=schedule_tasks, daemon=True)
     scheduler_thread.start()
 
     print("✅ Bot is running!")
-    bot.infinity_polling()
+
+    # Use infinity_polling with timeout to handle 409 errors
+    bot.infinity_polling(timeout=10, long_polling_timeout=5, skip_pending=True)
